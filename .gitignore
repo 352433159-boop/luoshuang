@@ -1,0 +1,7 @@
+.venv-jianying/
+__pycache__/
+*.pyc
+.venv/
+.agents/
+.codex/
+.env
