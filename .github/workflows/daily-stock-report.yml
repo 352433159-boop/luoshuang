@@ -22,7 +22,7 @@ jobs:
           pip install --upgrade pip
           pip install akshare requests
 
-      - name: 🏃 运行日报脚本
-        env:
-          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-        run: python scripts/stock_wechat_report.py
+ - name: 🏃 运行日报脚本
+   env:
+     PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+   run: python scripts/daily_report.py
