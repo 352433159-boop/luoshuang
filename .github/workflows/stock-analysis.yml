@@ -1,0 +1,37 @@
+name: 📈 个股深度分析
+
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: "股票代码（如 000858）"
+        required: true
+        type: string
+      market:
+        description: "市场 sz=深市 sh=沪市"
+        default: "sz"
+        type: choice
+        options: [sz, sh]
+      name:
+        description: "股票名称（如 五粮液，可选）"
+        required: false
+        type: string
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 📦 安装依赖
+        run: pip install akshare requests
+      - name: 🏃 运行分析
+        env:
+          STOCK_CODE: ${{ inputs.code }}
+          STOCK_NAME: ${{ inputs.name }}
+          STOCK_MARKET: ${{ inputs.market }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: python scripts/stock_analysis.py
