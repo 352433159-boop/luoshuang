@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """📚 每日学习计划"""
-
 import os, requests
 from datetime import datetime, timezone, timedelta
-from learning_data import get_content, LABELS
+from learning_data import get_content, LABELS, CONTENT
 
 TZ = timezone(timedelta(hours=8))
 DAY = datetime.now(TZ)
 DOY = DAY.timetuple().tm_yday
-CATS = ["english", "programming", "investing", "reading",
-        "general", "writing", "psychology", "math"]
+CATS = ["english", "programming", "investing", "reading", "general",
+        "writing", "psychology", "math", "hairstylist", "shopowner"]
 
 
 def build():
@@ -22,24 +21,42 @@ def build():
         L.append(f"\n{label}")
 
         if cat == "english":
-            word, pron, en, zh = e
-            en_short = en[:60] + chr(8230) if len(en) > 60 else en
-            L.append(f"  {word} {pron}")
-            L.append(f"  {zh} | {en_short}")
+            w, pron, meaning, etymology, usage, en, zh, tip = e
+            L.append(f"  {w} {pron}")
+            L.append(f"  {meaning}")
+            L.append(f"  📖 词源: {etymology[:80]}")
+            L.append(f"  💬 {en}")
+            L.append(f"  {zh}")
+            L.append(f"  💡 {tip}")
+
         elif cat == "reading":
             book, quote = e
-            q_short = quote[:60] + chr(8230) if len(quote) > 60 else quote
+            q2 = quote[:60] + chr(8230) if len(quote) > 60 else quote
             L.append(f"  {book}")
-            L.append(f"  {q_short}")
-        elif cat == "general":
-            name, desc = e
-            L.append(f"  {name}: {desc[:100]}")
+            L.append(f"  {q2}")
+
+        elif cat == "hairstylist":
+            topic, tip = e
+            L.append(f"  ✂️ {topic}")
+            L.append(f"  {tip[:100]}")
+
+        elif cat == "shopowner":
+            topic, tip = e
+            L.append(f"  🏪 {topic}")
+            L.append(f"  {tip[:100]}")
+
         elif cat == "writing":
             t, tip = e
-            L.append(f"  {t}: {tip[:100]}")
+            L.append(f"  ✏️ {t}: {tip[:100]}")
+
+        elif cat == "general":
+            n, d = e
+            L.append(f"  🤔 {n}: {d[:100]}")
+
         else:
             n, d = e
-            L.append(f"  {n}: {d[:100]}")
+            L.append(f"  {n}")
+            L.append(f"  {d[:100]}")
 
     L.extend([f"\n{chr(9472)*20}", "每天进步一点点 🤖 GH Actions"])
 
@@ -58,18 +75,15 @@ def build():
 
 def push(title, content):
     token = os.environ.get("PUSHPLUS_TOKEN", "")
-    if not token:
-        print(content)
-        return
+    if not token: print(content); return
     r = requests.post("https://www.pushplus.plus/send",
-        json={"token": token, "title": title, "content": content, "template": "txt"},
-        timeout=15).json()
+        json={"token": token, "title": title, "content": content, "template": "txt"}, timeout=15).json()
     print("OK" if r.get("code") == 200 else f"FAIL: {r}")
 
 
 if __name__ == "__main__":
-    print("Generating...\n")
+    print("生成中...\n")
     rpt = build()
-    print(f"Len: {len(rpt)}")
+    print(f"长度: {len(rpt)} 字符")
     print(rpt)
     push("📚 每日学习计划", rpt)
