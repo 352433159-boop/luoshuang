@@ -1,234 +1,240 @@
 #!/usr/bin/env python3
-"""📈 个股深度分析 —— 实时行情·技术面·财务面·估值"""
+"""📈 个股深度分析 —— yfinance + akshare 双数据源"""
 import os, sys, requests
 from datetime import datetime, timezone, timedelta
-from decimal import Decimal
-TZ = timezone(timedelta(hours=8))
 
-# 取参数
-stock_code = os.environ.get("STOCK_CODE", "")
-stock_name = os.environ.get("STOCK_NAME", "")
-market = os.environ.get("STOCK_MARKET", "sz")
-if not stock_code:
-    print("❌ 请设置环境变量 STOCK_CODE")
-    sys.exit(1)
+TZ = timezone(timedelta(hours=8))
+CODE = os.environ.get("STOCK_CODE", "").strip()
+NAME = os.environ.get("STOCK_NAME", "").strip()
+if not CODE:
+    sys.exit("❌ 请设置 STOCK_CODE")
+SUFFIX = os.environ.get("STOCK_MARKET", "sz").lower()
+YF_SUFFIX = ".SZ" if SUFFIX == "sz" else ".SS"
+YF_TICKER = CODE + YF_SUFFIX
 
 try:
-    import akshare as ak
+    import yfinance as yf
 except ImportError:
-    raise SystemExit("❌ pip install akshare")
+    raise SystemExit("❌ pip install yfinance requests")
 
 
 def safe(fn):
     def w(*a, **kw):
         try: return fn(*a, **kw)
-        except: return None
+        except Exception as e:
+            return None
     return w
 
 
-# ─── 数据采集 ───
+# ─── Data ───
 
 @safe
-def get_realtime():
-    """实时行情"""
-    df = ak.stock_zh_a_spot_em()
-    s = df[df['代码'] == stock_code]
-    if s.empty: return None
-    r = s.iloc[0]
+def get_info():
+    """股票基本信息 + 财务指标"""
+    tk = yf.Ticker(YF_TICKER)
+    info = tk.info
+    if not info: return None
     return {
-        "price": r["最新价"], "pct": r["涨跌幅"],
-        "open": r["今开"], "high": r["最高"], "low": r["最低"],
-        "vol": r["成交量"]/1e8, "amt": r["成交额"]/1e8,
-        "turnover": r["换手率"], "pe": r.get("市盈率-动态","?"),
-        "pb": r.get("市净率","?"), "mcap": r["总市值"]/1e8,
+        "name": info.get("longName", info.get("shortName", NAME or CODE)),
+        "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+        "prev_close": info.get("previousClose"),
+        "pct": info.get("regularMarketChangePercent"),
+        "pe": info.get("trailingPE") or info.get("forwardPE"),
+        "pb": info.get("priceToBook"),
+        "mcap": info.get("marketCap"),
+        "roe": info.get("returnOnEquity"),
+        "profit_margin": info.get("profitMargins"),
+        "debt": info.get("debtToEquity"),
+        "dividend_yield": info.get("dividendYield"),
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "recommendation": info.get("recommendationKey"),
+        "target": info.get("targetMeanPrice"),
+        "high52": info.get("fiftyTwoWeekHigh"),
+        "low52": info.get("fiftyTwoWeekLow"),
     }
 
 
 @safe
-def get_technical(n=90):
-    """技术面"""
-    start = (datetime.now(TZ) - timedelta(days=n*2)).strftime("%Y%m%d")
-    end = datetime.now(TZ).strftime("%Y%m%d")
-    df = ak.stock_zh_a_hist(symbol=stock_code, period="daily",
-                            start_date=start, end_date=end, adjust="qfq")
-    if df is None or df.empty: return None
-    close = df["收盘"].values
-    high = df["最高"].values
-    low = df["最低"].values
+def get_history(days=120):
+    """历史日线数据"""
+    tk = yf.Ticker(YF_TICKER)
+    df = tk.history(period=f"{days}d", interval="1d")
+    if df is None or df.empty:
+        return None
+    df = df.tail(days)
+    close = df["Close"].values
+    high = df["High"].values
+    low = df["Low"].values
+    vol = df["Volume"].values
     last = float(close[-1])
-    pct_30d = (last/float(close[-30])-1)*100 if len(close)>=30 else 0
-    pct_60d = (last/float(close[-60])-1)*100 if len(close)>=60 else 0
-    ma5 = float(df["收盘"].tail(5).mean())
-    ma20 = float(df["收盘"].tail(20).mean())
-    ma60 = float(df["收盘"].tail(60).mean())
+    pct_30 = (last/float(close[-30])-1)*100 if len(close)>=30 else 0
+    pct_60 = (last/float(close[-60])-1)*100 if len(close)>=60 else 0
+    ma5 = float(df["Close"].tail(5).mean())
+    ma20 = float(df["Close"].tail(20).mean())
+    ma60 = float(df["Close"].tail(60).mean())
     h60 = max(high[-60:]) if len(high)>=60 else max(high)
     l60 = min(low[-60:]) if len(low)>=60 else min(low)
-    # 量能
-    vol = df["成交量"].values
-    vol_5avg = vol[-5:].mean() if len(vol)>=5 else vol.mean()
-    vol_60avg = vol[-60:].mean() if len(vol)>=60 else vol.mean()
-    vol_ratio = vol_5avg/vol_60avg if vol_60avg else 1
+    vol_5 = vol[-5:].mean() if len(vol)>=5 else vol.mean()
+    vol_60 = vol[-60:].mean() if len(vol)>=60 else vol.mean()
     return {
-        "price": last, "high60": h60, "low60": l60,
-        "pct30": pct_30d, "pct60": pct_60d,
+        "price": last, "h60": h60, "l60": l60,
+        "pct30": pct_30, "pct60": pct_60,
         "ma5": ma5, "ma20": ma20, "ma60": ma60,
-        "vol_ratio": vol_ratio,
+        "vol_ratio": vol_5/vol_60 if vol_60 else 1,
     }
 
 
 @safe
-def get_finance():
-    """财务数据"""
-    # 利润表
-    inc = ak.stock_profit_sheet_by_report_em(symbol=stock_code)
-    items = []
-    if inc is not None:
-        for _, r in inc.head(4).iterrows():
-            op = float(r.get("营业总收入", 0))
-            np_ = float(r.get("净利润", 0))
-            if op > 0:
-                items.append((r["报告期"][:10], op/1e8, np_/1e8, np_/op*100))
-    # 主要指标（ROE等）
-    idx = ak.stock_financial_abstract_em(symbol=stock_code)
-    idx_data = {}
-    if idx is not None:
-        for _, r in idx.head(1).iterrows():
-            idx_data["roe"] = r.get("净资产收益率", "?")
-            idx_data["gross_margin"] = r.get("毛利率", "?")
-            idx_data["debt_ratio"] = r.get("资产负债率", "?")
-    return {"income": items, "indicators": idx_data}
+def get_income():
+    """利润表"""
+    tk = yf.Ticker(YF_TICKER)
+    inc = tk.income_stmt
+    if inc is None or inc.empty: return None
+    result = []
+    for col in inc.columns[:4]:
+        rev = inc.loc.get("Total Revenue", inc.loc.get("Operating Revenue"))
+        ni = inc.loc.get("Net Income")
+        if rev is not None and ni is not None:
+            rev_v = float(rev.get(col, 0))
+            ni_v = float(ni.get(col, 0))
+            if rev_v > 0:
+                result.append((str(col)[:10], rev_v/1e8, ni_v/1e8, ni_v/rev_v*100))
+    return result
 
 
 @safe
-def get_north_flow():
-    """北向资金"""
-    n = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
-    if n is not None and not n.empty:
-        return float(n.iloc[-1, 1])
+def get_balance():
+    """资产负债表关键指标"""
+    tk = yf.Ticker(YF_TICKER)
+    bs = tk.balance_sheet
+    if bs is None or bs.empty: return None
+    col = bs.columns[0]
+    cash = bs.loc.get("Cash And Cash Equivalents")
+    debt = bs.loc.get("Total Debt", bs.loc.get("Long Term Debt"))
+    equity = bs.loc.get("Stockholders Equity")
+    return {
+        "cash": float(cash.get(col, 0))/1e8 if cash is not None else None,
+        "debt": float(debt.get(col, 0))/1e8 if debt is not None else None,
+        "equity": float(equity.get(col, 0))/1e8 if equity is not None else None,
+    }
 
 
-# ─── 报告生成 ───
+# ─── Report ───
 
 def build():
     day = datetime.now(TZ).strftime("%Y年%m月%d日 %H:%M")
-    name = stock_name or stock_code
-    L = [f"📈 {name}({stock_code}) 深度分析 · {day}", "━"*26]
+    display = NAME or CODE
+    L = [f"📈 {display}({CODE}) 深度分析 · {day}", "━"*24]
 
-    # 1. 实时行情
-    rt = get_realtime()
-    if rt:
-        L.append(f"\n【实时行情】")
-        a = "📈" if rt["pct"]>0 else "📉"
-        L.append(f"  最新价: {rt['price']}  {a}{rt['pct']:+.2f}%")
-        L.append(f"  开{rt['open']}  高{rt['high']}  低{rt['low']}")
-        L.append(f"  成交{rt['vol']:.1f}亿  额{rt['amt']:.1f}亿")
-        L.append(f"  换手{rt['turnover']}%  PE{rt['pe']}  PB{rt['pb']}")
-        L.append(f"  总市值{rt['mcap']:.0f}亿")
+    # 1. 基本信息
+    info = get_info()
+    if info:
+        L.append(f"\n【公司概况】")
+        L.append(f"  {info.get('name','?')}")
+        L.append(f"  行业: {info.get('sector','?')} - {info.get('industry','?')}")
+        price = info.get("price")
+        if price:
+            pct = info.get("pct", 0)
+            pct_val = pct * 100 if abs(pct) < 1 else pct  # yfinance有时返回小数
+            a = "📈" if pct_val > 0 else "📉"
+            L.append(f"  最新价: {price:.2f}  {a}{pct_val:+.2f}%")
+        L.append(f"  市盈率PE: {info.get('pe','?')}  市净率PB: {info.get('pb','?')}")
+        L.append(f"  总市值: {info.get('mcap',0)/1e8:.0f}亿")
+        if info.get("dividend_yield"):
+            L.append(f"  股息率: {info['dividend_yield']*100:.2f}%")
+        if info.get("recommendation"):
+            L.append(f"  机构评级: {info['recommendation']}")
+        if info.get("target"):
+            L.append(f"  机构目标价: {info['target']:.2f}")
     else:
-        L.append(f"\n暂无实时数据")
+        L.append(f"\n暂无行情数据")
 
     # 2. 技术面
-    tech = get_technical()
-    if tech:
+    hist = get_history()
+    if hist:
         L.append(f"\n【技术面】(近60日)")
-        L.append(f"  当前{tech['price']:.2f}  最高{tech['high60']:.2f}  最低{tech['low60']:.2f}")
-        L.append(f"  近30日: {tech['pct30']:+.2f}%  近60日: {tech['pct60']:+.2f}%")
-        L.append(f"  MA5:{tech['ma5']:.2f}  MA20:{tech['ma20']:.2f}  MA60:{tech['ma60']:.2f}")
-        pos = f"当前价在MA20{'上📈' if tech['price']>tech['ma20'] else '下📉'}"
-        pos += f"，MA60{'上📈' if tech['price']>tech['ma60'] else '下📉'}"
+        L.append(f"  当前{hist['price']:.2f}  最高{hist['h60']:.2f}  最低{hist['l60']:.2f}")
+        L.append(f"  近30日: {hist['pct30']:+.2f}%  近60日: {hist['pct60']:+.2f}%")
+        L.append(f"  MA5:{hist['ma5']:.2f}  MA20:{hist['ma20']:.2f}  MA60:{hist['ma60']:.2f}")
+        pos = f"当前价在MA20{'上📈' if hist['price']>hist['ma20'] else '下📉'}"
+        pos += f"，MA60{'上📈' if hist['price']>hist['ma60'] else '下📉'}"
         L.append(f"  {pos}")
-        # 趋势判断
-        if tech["price"] > tech["ma20"] > tech["ma60"]:
-            L.append(f"  趋势: 多头排列，中期看涨 ✅")
-        elif tech["price"] < tech["ma20"] < tech["ma60"]:
-            L.append(f"  趋势: 空头排列，中期看跌 ❌")
-        elif tech["price"] > tech["ma20"] and tech["price"] < tech["ma60"]:
-            L.append(f"  趋势: 短期企稳但中期仍承压，观望 ⚠️")
-        else:
-            L.append(f"  趋势: 方向不明朗")
+        # 趋势
+        if hist["price"] > hist["ma20"] > hist["ma60"]: L.append("  趋势: 多头排列✅")
+        elif hist["price"] < hist["ma20"] < hist["ma60"]: L.append("  趋势: 空头排列❌")
+        else: L.append("  趋势: 方向不明⚠️")
         # 量能
-        vr = tech["vol_ratio"]
-        if vr > 1.5: L.append(f"  量能: 近期放量{vr:.1f}倍，关注突破方向 🔥")
-        elif vr < 0.7: L.append(f"  量能: 近期缩量(均量{vr:.0%})，市场关注度下降")
-        else: L.append(f"  量能: 正常水平")
+        vr = hist["vol_ratio"]
+        L.append(f"  量能: {'放量' if vr>1.2 else '缩量' if vr<0.8 else '正常'}(均量{vr:.2f}倍)")
     else:
         L.append(f"\n暂无技术数据")
 
     # 3. 财务面
-    fin = get_finance()
-    if fin and fin["income"]:
-        L.append(f"\n【财务数据】(最近4期)")
-        for period, rev, profit, margin in fin["income"]:
-            L.append(f"  {period}: 营收{rev:.0f}亿  净利{profit:.0f}亿  净利率{margin:.1f}%")
-        if fin["indicators"]:
-            ind = fin["indicators"]
-            L.append(f"  ROE: {ind.get('roe','?')}%  毛利率: {ind.get('gross_margin','?')}%  负债率: {ind.get('debt_ratio','?')}%")
-    else:
-        L.append(f"\n暂无财务数据")
+    L.append(f"\n【财务面】")
+    inc = get_income()
+    if inc:
+        for p, rev, ni, margin in inc:
+            L.append(f"  {p}: 营收{rev:.0f}亿  净利{ni:.0f}亿  净利率{margin:.1f}%")
+    if info:
+        roe = info.get("roe")
+        pm = info.get("profit_margin")
+        debt = info.get("debt")
+        if roe: L.append(f"  ROE: {roe*100:.1f}%")
+        if pm: L.append(f"  净利率: {pm*100:.1f}%")
+        if debt is not None: L.append(f"  负债/权益: {debt:.1f}%")
+    bs = get_balance()
+    if bs:
+        if bs.get("cash"): L.append(f"  现金: {bs['cash']:.0f}亿")
+        if bs.get("debt"): L.append(f"  负债: {bs['debt']:.0f}亿")
+    if not inc and not bs: L.append("  暂无财务数据")
 
     # 4. 估值区间
-    if rt and tech:
-        L.append(f"\n【估值与建议】")
-        price = rt["price"]
-        h60, l60 = tech["high60"], tech["low60"]
-        mid = (h60 + l60) / 2
-        pct_from_high = (price - h60) / h60 * 100
-        pct_from_low = (price - l60) / l60 * 100
-        L.append(f"  距60日高点{h60}: {pct_from_high:+.1f}%")
-        L.append(f"  距60日低点{l60}: {pct_from_low:+.1f}%")
-        if pct_from_high > -5:
-            L.append(f"  ⚠️ 接近60日高点，不建议追高")
-        elif pct_from_low < 10:
-            L.append(f"  💡 接近60日低点，可关注逢低机会")
-        else:
-            L.append(f"  ⏳ 处于中间位置，等待方向选择")
+    if hist:
+        L.append(f"\n【估值区间】")
+        price = hist["price"]
+        dist_high = (price - hist["h60"]) / hist["h60"] * 100
+        dist_low = (price - hist["l60"]) / hist["l60"] * 100
+        L.append(f"  距60日高{hist['h60']:.2f}: {dist_high:+.1f}%")
+        L.append(f"  距60日低{hist['l60']:.2f}: {dist_low:+.1f}%")
+        if dist_low < 5: L.append("  📗 靠近低点，可关注")
+        elif dist_high > -5: L.append("  📕 靠近高点，追高风险")
+        else: L.append("  ⏳ 中间位置，等待方向")
 
-    # 5. 综合研判
+    # 5. 综合
     L.append(f"\n【综合研判】")
-    if rt and tech:
+    if hist and info:
         score = 0
-        reasons = []
-        # 估值
-        pe_str = str(rt.get("pe","?"))
-        try:
-            pe = float(pe_str.replace(",",""))
-            if pe < 15: score += 1; reasons.append("PE<15，估值偏低")
-            elif pe < 25: reasons.append("PE适中")
-            else: score -= 1; reasons.append("PE偏高")
-        except: pass
-        # 趋势
-        if tech["price"] > tech["ma20"]: score += 1; reasons.append("站上MA20")
-        else: score -= 1; reasons.append("在MA20下方")
-        if tech["price"] > tech["ma60"]: score += 1; reasons.append("站上MA60")
-        # 位置
-        if pct_from_low < 10: score += 1; reasons.append("接近60日低点")
-        elif pct_from_high > -5: score -= 1; reasons.append("接近60日高点")
+        if info.get("pe") and info["pe"] < 20: score+=1
+        if hist["price"] > hist["ma20"]: score+=1
+        if hist["price"] > hist["ma60"]: score+=1
+        dist_low_val = (hist["price"] - hist["l60"]) / hist["l60"] * 100
+        if dist_low_val < 5: score+=1
+        adv = {5:"强烈关注🌟",4:"可关注✅",
+               3:"中性观望⚖️",2:"谨慎🔻",
+               1:"回避❌",0:"回避❌"}.get(score, "观望")
+        L.append(f"  评分: {score}/5 → {adv}")
+        if info.get("recommendation") == "buy": L.append(f"  机构建议: 买入")
+        elif info.get("recommendation") == "hold": L.append(f"  机构建议: 持有")
+        elif info.get("recommendation") == "sell": L.append(f"  机构建议: 卖出")
+    L.append(f"\n{'━'*24}")
+    L.append("🤖 AI分析·仅供参考")
 
-        total = f"综合评分: {score}/5"
-        adv = "可关注 📗" if score >= 2 else ("观望 ⚠️" if score >= 0 else "谨慎 🔴")
-        L.append(f"  {total} → {adv}")
-        for r in reasons: L.append(f"  • {r}")
-    else:
-        L.append(f"  数据不足")
-
-    L.extend([f"\n{'━'*26}", "🤖 AI自动分析 · 不构成投资建议"])
     return "\n".join(L)
 
 
 def push(title, content):
     token = os.environ.get("PUSHPLUS_TOKEN", "")
-    if not token:
-        print(content)
-        return
-    if len(content) > 1800:
-        content = content[:1700] + "\n\n(内容较长，已截断)"
+    if not token: print(content); return
+    if len(content) > 1800: content = content[:1700] + "\n\n(已截断)"
     r = requests.post("https://www.pushplus.plus/send",
-        json={"token": token, "title": title, "content": content, "template": "txt"}, timeout=15).json()
-    print("✅ 已推送" if r.get("code") == 200 else f"❌ {r}")
+        json={"token": token, "title": title, "content": content, "template": "txt"}, timeout=15)
+    j = r.json()
+    print("✅ 推送成功" if j.get("code") == 200 else f"❌ 推送失败")
 
 
 if __name__ == "__main__":
-    print(f"🔍 正在分析 {stock_name or stock_code}...\n")
+    print(f"🔍 {display} 分析中...\n")
     rpt = build()
     print(rpt)
-    push(f"📈 {stock_name or stock_code} 深度分析", rpt)
+    push(f"📈 {display} 深度分析", rpt)
