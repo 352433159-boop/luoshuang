@@ -1,0 +1,23 @@
+name: 📊 基金晨报 云端实时
+
+on:
+  schedule:
+    # 北京时间 15:00 = UTC 07:00
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📊 生成并推送云端实时晨报
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: python scripts/cloud_fund_report.py
