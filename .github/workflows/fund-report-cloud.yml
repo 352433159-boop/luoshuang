@@ -1,0 +1,23 @@
+name: 📊 基金晨报 云端补发
+
+on:
+  schedule:
+    # 北京时间 11:00 = UTC 03:00
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📤 推送昨日基金晨报
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: python scripts/send_latest_report.py
