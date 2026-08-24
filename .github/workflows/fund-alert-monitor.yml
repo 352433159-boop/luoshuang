@@ -1,0 +1,35 @@
+name: ⚠️ 基金异动实时预警
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # A股交易时段：北京时间09:00-15:00 = UTC 01:00-07:00，每10分钟
+    - cron: "*/10 1-7 * * 1-5"
+    # 晚间黄金/纳指：北京时间20:00-23:30 = UTC 12:00-15:30，每30分钟
+    - cron: "*/30 12-15 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 💾 恢复预警状态
+        uses: actions/cache@v4
+        with:
+          path: alert_state.json
+          key: alert-state-${{ github.run_id }}
+          restore-keys: alert-state-
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 🔔 检查异动并推送
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: python scripts/monitor_alerts.py
