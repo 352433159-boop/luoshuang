@@ -249,15 +249,15 @@ def send(title, content):
 
 if __name__ == "__main__":
     dry_run = "--dry-run" in sys.argv
-    print("fetching quotes...")
+    print("fetching quotes...", file=sys.stderr)
     all_symbols = list(ETF_MAP.values()) + ["sh000001", "sz399001", "sz399006", "sh513500", "sh513050"]
     quotes = get_quotes(sorted(set(all_symbols)))
-    print("fetching fund navs...")
+    print("fetching fund navs...", file=sys.stderr)
     fund_data = {}
     for code, short, sector in FUNDS:
         nav, chg, date = get_fund_nav(code)
         fund_data[code] = (nav, chg, date)
-        print(code, short, nav, chg, date)
+        print(code, short, nav, chg, date, file=sys.stderr)
     html = build_html(fund_data, quotes, {})
     if dry_run:
         print(html)
