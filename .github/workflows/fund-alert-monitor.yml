@@ -20,7 +20,9 @@ jobs:
       - name: 💾 恢复预警状态
         uses: actions/cache@v4
         with:
-          path: alert_state.json
+          path: |
+            alert_state.json
+            news_state.json
           key: alert-state-${{ github.run_id }}
           restore-keys: alert-state-
 
@@ -33,3 +35,8 @@ jobs:
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         run: python scripts/monitor_alerts.py
+
+      - name: 📰 检查相关新闻并推送
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: python scripts/news_alerts.py
