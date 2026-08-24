@@ -7,8 +7,11 @@ import re
 import sys
 import urllib.request
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 TZ = timezone(timedelta(hours=8))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+REPORTS_DIR = REPO_ROOT / "reports"
 
 FUNDS = [
     ("000217", "华安黄金", "黄金"),
@@ -260,4 +263,12 @@ if __name__ == "__main__":
         print(html)
         sys.exit(0)
     title = f"📊 基金晨报（云端实时）· {datetime.now(TZ).strftime('%m月%d日')}"
+    try:
+        REPORTS_DIR.mkdir(exist_ok=True)
+        dated = REPORTS_DIR / f"fund_report_{datetime.now(TZ).strftime('%Y%m%d')}.html"
+        dated.write_text(html, encoding="utf-8")
+        (REPORTS_DIR / "latest.html").write_text(html, encoding="utf-8")
+        print("SAVED", dated)
+    except Exception as exc:
+        print("SAVE_ERR", exc)
     sys.exit(send(title, html))
