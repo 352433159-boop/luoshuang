@@ -30,6 +30,16 @@ QUOTES = [
     ("sz399006", "创业板", "大盘"),
 ]
 
+WATCH = [
+    ("sh512880", "证券", "券商", "可建仓方向：券商｜等市场放量突破再分批，逻辑：牛市旗手+成交额放大直接受益"),
+    ("sh512800", "银行", "银行", "可建仓方向：银行｜高股息+破净修复，可定投，逻辑：利率企稳+险资增配"),
+    ("sh512400", "有色", "有色金属", "可建仓方向：有色｜铜金资源回调分批，逻辑：供需缺口+金价支撑"),
+    ("sh512890", "红利低波", "红利", "可建仓方向：红利低波｜每月定投，逻辑：低波动+高股息防守"),
+    ("sz159928", "消费", "消费", "可建仓方向：消费｜等放量确认，逻辑：估值低位+政策刺激"),
+    ("sh513180", "恒生科技", "港股科技", "可建仓方向：恒生科技｜等放量，逻辑：港股估值低+流动性修复"),
+    ("sh512930", "AI主题", "AI", "可建仓方向：AI主题｜等右侧信号，逻辑：AI叙事未结束但波动大"),
+]
+
 LEVELS = {
     "sh512760": [
         (1.08, "below", "芯片ETF跌破1.08，半导体继续规避，不抄底"),
@@ -125,7 +135,8 @@ def push(title, content):
 
 def main():
     state = load_state()
-    quotes = get_quotes([s for s, _, _ in QUOTES])
+    symbols = [s for s, _, _ in QUOTES] + [s for s, _, _, _ in WATCH]
+    quotes = get_quotes(sorted(set(symbols)))
     alerts = []
 
     for sym, name, sector in QUOTES:
@@ -153,6 +164,21 @@ def main():
                 state["levels"][key] = True
             if not reached:
                 state["levels"][key] = False
+
+    for sym, name, sector, suggestion in WATCH:
+        q = quotes.get(sym)
+        if not q:
+            continue
+        chg = q["chg"]
+        bucket = round(chg * 2) / 2
+        if abs(chg) >= 3 and state["buckets"].get(sym) != bucket:
+            severe = "font-weight:bold;" if abs(chg) >= 5 else ""
+            style = f"color:#e60000;{severe}"
+            alerts.append(
+                f"<span style='{style}'>🟢 {name} {chg:+.2f}%（现价{q['price']:.3f}）</span>"
+                f"<br><span style='color:#006600;'>{suggestion}</span>"
+            )
+            state["buckets"][sym] = bucket
 
     now = time.time()
     if alerts and (now - state.get("last_push", 0)) >= 300:
