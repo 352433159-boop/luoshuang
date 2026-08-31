@@ -5,3 +5,4 @@ __pycache__/
 .agents/
 .codex/
 .env
+reports/ai_analysis_state.json
