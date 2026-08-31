@@ -45,6 +45,6 @@ jobs:
         run: |
           git config user.name "codex"
           git config user.email "codex@local"
-          git add alert_state.json news_state.json
+          git add alert_state.json news_state.json 2>/dev/null || true
           git diff --cached --quiet || git commit -m "update alert state $(date +%Y%m%d-%H%M)"
           git push
