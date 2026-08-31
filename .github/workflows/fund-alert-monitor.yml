@@ -1,7 +1,7 @@
 name: ⚠️ 基金异动实时预警
 
 permissions:
-  contents: read
+  contents: write
 
 on:
   schedule:
@@ -40,3 +40,11 @@ jobs:
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         run: python scripts/news_alerts.py
+
+      - name: 💾 预警状态入库
+        run: |
+          git config user.name "codex"
+          git config user.email "codex@local"
+          git add alert_state.json news_state.json
+          git diff --cached --quiet || git commit -m "update alert state $(date +%Y%m%d-%H%M)"
+          git push
