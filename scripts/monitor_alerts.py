@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""行情异动实时预警：轮询ETF/指数，触发阈值立即推送微信。"""
+
+import json
+import os
+import re
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+STATE_PATH = Path(os.environ.get("ALERT_STATE", REPO_ROOT / "alert_state.json"))
+
+QUOTES = [
+    ("sh518880", "黄金", "黄金"),
+    ("sh513100", "纳指", "纳指"),
+    ("sh512760", "芯片", "半导体"),
+    ("sh515790", "光伏", "光伏"),
+    ("sh512660", "军工", "军工"),
+    ("sh516780", "稀土", "稀土"),
+    ("sz159819", "机器人", "机器人"),
+    ("sh515180", "红利", "红利"),
+    ("sz159338", "A500", "宽基"),
+    ("sh515880", "通信", "AI算力"),
+    ("sz159938", "医药", "医药"),
+    ("sh513050", "中概", "港股"),
+    ("sh000001", "上证", "大盘"),
+    ("sz399001", "深成", "大盘"),
+    ("sz399006", "创业板", "大盘"),
+]
+
+WATCH = [
+    ("sh512880", "证券", "券商", "可建仓方向：券商｜等市场放量突破再分批，逻辑：牛市旗手+成交额放大直接受益"),
+    ("sh512800", "银行", "银行", "可建仓方向：银行｜高股息+破净修复，可定投，逻辑：利率企稳+险资增配"),
+    ("sh512400", "有色", "有色金属", "可建仓方向：有色｜铜金资源回调分批，逻辑：供需缺口+金价支撑"),
+    ("sh512890", "红利低波", "红利", "可建仓方向：红利低波｜每月定投，逻辑：低波动+高股息防守"),
+    ("sz159928", "消费", "消费", "可建仓方向：消费｜等放量确认，逻辑：估值低位+政策刺激"),
+    ("sh513180", "恒生科技", "港股科技", "可建仓方向：恒生科技｜等放量，逻辑：港股估值低+流动性修复"),
+    ("sh512930", "AI主题", "AI", "可建仓方向：AI主题｜等右侧信号，逻辑：AI叙事未结束但波动大"),
+]
+
+LEVELS = {
+    "sh512760": [
+        (1.08, "below", "芯片ETF跌破1.08，半导体继续规避，不抄底"),
+        (1.12, "above", "芯片ETF站回1.12，半导体转震荡，可观察右侧"),
+    ],
+    "sh515880": [
+        (0.68, "above", "通信ETF站稳0.68，AI算力方向可开始分批建仓（007818）"),
+    ],
+    "sh518880": [
+        (9.00, "below", "黄金ETF跌破9.00，若连续3日建议减仓至10%以下"),
+    ],
+    "sz159938": [
+        (0.69, "above", "医药ETF站稳0.69，创新药方向可分批建仓（001344）"),
+    ],
+}
+
+SUGGESTIONS = {
+    "半导体": "半导体急跌/大涨：不追高不抄底；财通006503反弹至7.2-7.4减半或换008887。逻辑：主动高波动基金降风险，换成指数基金分散经理风险",
+    "机器人": "机器人高波动：不追加，等159819站回1.78。逻辑：AI主题情绪波动大，右侧确认再加",
+    "黄金": "黄金波动：占比接近15%上限，只持有不加。逻辑：单一商品仓位过高，避免赌金价",
+    "红利": "红利异动：防守仓，可小额定投。逻辑：利率下行+险资增配高股息",
+    "电网": "电网异动：逻辑未坏，回调分批国泰023638。逻辑：电网投资+特高压+AI用电需求确定",
+    "AI算力": "AI算力异动：等515880站稳0.68再分批007818。逻辑：光模块/服务器有真实订单，回调是机会",
+    "医药": "医药异动：等159938站稳0.69再分批001344。逻辑：创新药出海+医保政策，估值低位",
+    "大盘": "大盘异动：控制仓位，别追高别恐慌割肉。逻辑：情绪波动不改长期逻辑，纪律比预测重要",
+}
+
+
+def http_get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode("utf-8", errors="ignore")
+
+
+def get_quotes(symbols):
+    url = "http://qt.gtimg.cn/q=" + ",".join(symbols)
+    text = http_get(url)
+    result = {}
+    for line in text.splitlines():
+        m = re.search(r'v_([a-z0-9]+)="([^"]+)"', line)
+        if not m:
+            continue
+        f = m.group(2).split("~")
+        if len(f) < 33:
+            continue
+        try:
+            price = float(f[3])
+            chg = float(f[32])
+        except ValueError:
+            continue
+        result[m.group(1)] = {"price": price, "chg": chg}
+    return result
+
+
+def load_state():
+    if STATE_PATH.exists():
+        try:
+            return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"buckets": {}, "levels": {}, "last_push": 0}
+
+
+def save_state(state):
+    STATE_PATH.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+
+def push(title, content):
+    token = os.environ.get("PUSHPLUS_TOKEN", "").strip()
+    if not token:
+        print("NO_TOKEN")
+        return 2
+    payload = json.dumps(
+        {"token": token, "title": title, "content": content, "template": "html"}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        "https://www.pushplus.plus/send",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        if result.get("code") == 200:
+            print("PUSH_OK")
+            return 0
+        print("PUSH_FAIL", json.dumps(result, ensure_ascii=False))
+        return 1
+    except Exception as exc:
+        print("PUSH_ERR", exc)
+        return 1
+
+
+def main():
+    state = load_state()
+    symbols = [s for s, _, _ in QUOTES] + [s for s, _, _, _ in WATCH]
+    quotes = get_quotes(sorted(set(symbols)))
+    alerts = []
+
+    for sym, name, sector in QUOTES:
+        q = quotes.get(sym)
+        if not q:
+            continue
+        chg = q["chg"]
+        price = q["price"]
+        bucket = round(chg * 2) / 2  # 0.5% granularity
+        if abs(chg) >= 3 and state["buckets"].get(sym) != bucket:
+            severe = "font-weight:bold;" if abs(chg) >= 5 else ""
+            style = f"color:#e60000;{severe}"
+            suggestion = SUGGESTIONS.get(sector, "")
+            alerts.append(
+                f"<span style='{style}'>🔴 {name} {chg:+.2f}%（现价{price:.3f}）</span>"
+                + (f"<br>建议：{suggestion}" if suggestion else "")
+            )
+            state["buckets"][sym] = bucket
+
+        for level, direction, msg in LEVELS.get(sym, []):
+            key = f"{sym}:{level}:{direction}"
+            reached = price >= level if direction == "above" else price <= level
+            if reached and not state["levels"].get(key):
+                alerts.append(f"<span style='color:#e60000;'>⚠️ {msg}</span>")
+                state["levels"][key] = True
+            if not reached:
+                state["levels"][key] = False
+
+    for sym, name, sector, suggestion in WATCH:
+        q = quotes.get(sym)
+        if not q:
+            continue
+        chg = q["chg"]
+        bucket = round(chg * 2) / 2
+        if abs(chg) >= 3 and state["buckets"].get(sym) != bucket:
+            severe = "font-weight:bold;" if abs(chg) >= 5 else ""
+            style = f"color:#e60000;{severe}"
+            alerts.append(
+                f"<span style='{style}'>🟢 {name} {chg:+.2f}%（现价{q['price']:.3f}）</span>"
+                f"<br><span style='color:#006600;'>{suggestion}</span>"
+            )
+            state["buckets"][sym] = bucket
+
+    now = time.time()
+    if alerts and (now - state.get("last_push", 0)) >= 300:
+        html = (
+            "<div style='font-size:16px;line-height:1.7;color:#000;'>"
+            "<b>⚠️ 基金异动提醒</b><br>" + "<br>".join(alerts)
+            + "<br><br><span style='color:#555;font-size:13px;'>自动监控，规则版提醒，不构成投资建议。</span></div>"
+        )
+        state["last_push"] = now
+        save_state(state)
+        return push("⚠️ 基金异动提醒", html)
+
+    save_state(state)
+    print("NO_ALERT")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
