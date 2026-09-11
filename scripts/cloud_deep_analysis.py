@@ -283,7 +283,7 @@ def generate_ai_html(fund_data, quotes):
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.3,
-        "max_tokens": 3500,
+        "max_tokens": 8000,
     }
     req = urllib.request.Request(
         "https://api.deepseek.com/v1/chat/completions",
@@ -312,6 +312,7 @@ def generate_ai_html(fund_data, quotes):
 
 
 def main():
+    dry_run = "--dry-run" in sys.argv
     symbols = sorted(
         set(
             list(SECTOR_ETF.values())
@@ -350,6 +351,10 @@ def main():
     dated.write_text(html, encoding="utf-8")
     (REPORTS_DIR / "latest_cloud_deep_analysis.html").write_text(html, encoding="utf-8")
     print("SAVED", dated)
+    print("HTML_LEN", len(html))
+    if dry_run:
+        print(html)
+        return 0
     title = f"🧠 盘中AI深度解读 {datetime.now(TZ).strftime('%m月%d日')} 14:30"
     return cfr.send(title, html)
 
