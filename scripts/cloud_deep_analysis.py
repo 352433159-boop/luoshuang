@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -215,6 +216,101 @@ def build_html(fund_data, quotes):
     return "".join(lines)
 
 
+def _market_context(fund_data, quotes):
+    parts = []
+    for name, symbol in (
+        ("上证", "sh000001"),
+        ("深成", "sz399001"),
+        ("创业板", "sz399006"),
+        ("科创50", "sh000688"),
+        ("沪深300", "sh000300"),
+    ):
+        q = quotes.get(symbol)
+        if q:
+            parts.append(f"{name} {q['price']:.2f} {q['chg']:+.2f}%")
+    lines = ["指数：" + "；".join(parts)]
+
+    sector_lines = []
+    for sector, symbol in MAJOR_ETFS:
+        q = quotes.get(symbol)
+        if q:
+            sector_lines.append(f"{sector} {q['chg']:+.2f}%")
+    lines.append("板块ETF：" + "；".join(sector_lines))
+
+    fund_lines = []
+    for code, short, sector in cfr.FUNDS:
+        nav, chg, date = fund_data.get(code, (None, None, ""))
+        if nav is None:
+            fund_lines.append(f"{short}（{code}，{sector}）：净值获取失败")
+        else:
+            fund_lines.append(
+                f"{short}（{code}，{sector}）：净值{nav:.4f}（{date}），{chg:+.2f}%"
+            )
+    lines.append("持仓基金：" + "；".join(fund_lines))
+    news = _recent_news()
+    if news:
+        lines.append("今日新闻：" + "；".join(news))
+    return "\n".join(lines)
+
+
+def generate_ai_html(fund_data, quotes):
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        return build_html(fund_data, quotes)
+
+    date_text = datetime.now(TZ).strftime("%m月%d日")
+    context = _market_context(fund_data, quotes)
+    prompt = f"""你是我的基金分析助手。请基于下面真实行情与持仓数据，生成一份适合 iPhone 微信阅读的 HTML 深度分析。
+
+硬性要求：
+1. 只输出一个 HTML 片段，从 <div 开始到 </div> 结束，不要 Markdown 代码块。
+2. 正文纯黑 #000000、字号16px、行高1.7；重点数据/操作/风险用 #e60000 红色；免责声明用 #555555。
+3. 标题写：🧠 盘中AI深度解读 · {date_text} 14:30
+4. 必须包含这些板块：【发生了什么】【为什么】【对持仓的影响】【什么时候操作】【操作方式】【可建仓方向】【风险提示】。
+5. 【为什么】用1-3句简单直白的逻辑，不要空话。
+6. 【对持仓的影响】要覆盖下面持仓基金中受影响最大的部分，说明预计方向；当天净值未公布时用ETF/指数估算。
+7. 【什么时候操作】写清楚今天14:30-15:00、明天开盘、连续2日确认等具体时间窗口。
+8. 【操作方式】必须具体到基金全名+代码、买卖/减仓/止损/止盈、分批次数、每批占总仓位比例、触发净值或ETF点位。
+9. 不要承诺收益，不要制造恐慌；结尾加灰色免责声明：AI分析仅供参考，不构成投资建议。
+
+行情与持仓数据：
+{context}
+"""
+    payload = {
+        "model": "deepseek-flash",
+        "messages": [
+            {"role": "system", "content": "你是严谨、克制、面向普通投资者的基金分析助手。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 3500,
+    }
+    req = urllib.request.Request(
+        "https://api.deepseek.com/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        html = data["choices"][0]["message"]["content"].strip()
+        html = re.sub(r"^```(?:html)?\s*", "", html)
+        html = re.sub(r"\s*```$", "", html)
+        if "<div" in html:
+            html = html[html.find("<div") :]
+        if "</div>" in html:
+            html = html[: html.rfind("</div>") + len("</div>")]
+        else:
+            html += "</div>"
+        return html
+    except Exception as exc:
+        print("AI_ERR", str(exc)[:240], file=sys.stderr)
+        return build_html(fund_data, quotes)
+
+
 def main():
     symbols = sorted(
         set(
@@ -248,7 +344,7 @@ def main():
         fund_data[code] = (nav, chg, date)
         print(code, short, nav, chg, date, file=sys.stderr)
 
-    html = build_html(fund_data, quotes)
+    html = generate_ai_html(fund_data, quotes)
     REPORTS_DIR.mkdir(exist_ok=True)
     dated = REPORTS_DIR / f"cloud_deep_analysis_{datetime.now(TZ).strftime('%Y%m%d')}.html"
     dated.write_text(html, encoding="utf-8")
