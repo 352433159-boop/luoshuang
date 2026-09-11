@@ -272,31 +272,49 @@ def generate_ai_html(fund_data, quotes):
 7. 【什么时候操作】写清楚今天14:30-15:00、明天开盘、连续2日确认等具体时间窗口。
 8. 【操作方式】必须具体到基金全名+代码、买卖/减仓/止损/止盈、分批次数、每批占总仓位比例、触发净值或ETF点位。
 9. 不要承诺收益，不要制造恐慌；结尾加灰色免责声明：AI分析仅供参考，不构成投资建议。
+10. 每个板块用1-2句话或3-6条短句，务必在本次回复里完整输出全部7个板块，总长度控制在3500字以内。
 
 行情与持仓数据：
 {context}
 """
-    payload = {
-        "model": "deepseek-flash",
-        "messages": [
-            {"role": "system", "content": "你是严谨、克制、面向普通投资者的基金分析助手。"},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 8000,
-    }
-    req = urllib.request.Request(
-        "https://api.deepseek.com/v1/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer " + api_key,
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
+    required = [
+        "【发生了什么】",
+        "【为什么】",
+        "【对持仓的影响】",
+        "【什么时候操作】",
+        "【操作方式】",
+        "【可建仓方向】",
+        "【风险提示】",
+    ]
+
+    def call_model(user_prompt):
+        payload = {
+            "model": "deepseek-flash",
+            "messages": [
+                {"role": "system", "content": "你是严谨、克制、面向普通投资者的基金分析助手。"},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 8000,
+        }
+        req = urllib.request.Request(
+            "https://api.deepseek.com/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": "Bearer " + api_key,
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        html = data["choices"][0]["message"]["content"].strip()
+        choice = data["choices"][0]
+        print(
+            "AI_USAGE",
+            choice.get("finish_reason"),
+            data.get("usage"),
+            file=sys.stderr,
+        )
+        html = choice["message"]["content"].strip()
         html = re.sub(r"^```(?:html)?\s*", "", html)
         html = re.sub(r"\s*```$", "", html)
         if "<div" in html:
@@ -306,9 +324,27 @@ def generate_ai_html(fund_data, quotes):
         else:
             html += "</div>"
         return html
-    except Exception as exc:
-        print("AI_ERR", str(exc)[:240], file=sys.stderr)
-        return build_html(fund_data, quotes)
+
+    for attempt, user_prompt in enumerate(
+        [
+            prompt,
+            prompt
+            + "\n\n重要：上一次输出不完整。请压缩每个板块，只保留最关键的数字和操作，"
+            "必须在本次回复中完整写出全部7个板块。",
+        ],
+        start=1,
+    ):
+        try:
+            html = call_model(user_prompt)
+        except Exception as exc:
+            print("AI_ERR", str(exc)[:240], file=sys.stderr)
+            break
+        missing = [section for section in required if section not in html]
+        print("AI_ATTEMPT", attempt, "LEN", len(html), "MISSING", missing, file=sys.stderr)
+        if not missing and len(html) >= 2500:
+            return html
+    print("AI_FALLBACK", file=sys.stderr)
+    return build_html(fund_data, quotes)
 
 
 def main():
