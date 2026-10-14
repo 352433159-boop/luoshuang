@@ -1,0 +1,39 @@
+name: 🚨 美国市场风险监控
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    # 美股交易时段（UTC 13:00-21:30），每30分钟检查一次
+    - cron: "*/30 13-21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "是否发送测试推送"
+        required: false
+        default: "false"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 🚨 检查美国市场风险
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: python scripts/us_risk_monitor.py ${{ github.event.inputs.test == 'true' && '--test' || '' }}
+
+      - name: 💾 保存风险状态
+        run: |
+          git config user.name "codex"
+          git config user.email "codex@local"
+          git add reports/us_risk_state.json 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "update US risk state $(date +%Y%m%d-%H%M)"
+          git push
