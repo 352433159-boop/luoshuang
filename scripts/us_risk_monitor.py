@@ -87,35 +87,54 @@ SIGNAL_META = {
 }
 
 REFERENCE_ROWS = [
-    ("VIX恐慌指数", "<20", "20-25", "25-30", ">30；>40危机", "20以上开始对冲，30以上降杠杆，40以上全面防守"),
-    ("标普500回撤", "<5%", "5%-10%", "10%-20%", ">20%", "10%以上减少高beta，20%以上按熊市处理"),
-    ("纳指100回撤", "<10%", "10%-15%", "15%-20%", ">20%", "科技/AI仓位集中者优先降仓"),
-    ("高收益债利差", "<350bp", "350-450bp", "450-500bp", ">500bp；>700bp危机", "450bp以上减信用暴露，500bp以上防守"),
-    ("投资级信用利差", "<100bp", "100-130bp", "130-150bp", ">150bp", "利差走阔说明融资环境恶化"),
-    ("10年期美债收益率", "<4.5%", "4.5%-5.0%", "5.0%-5.5%", ">5.5%", "5%以上压估值，5.5%以上防跨资产抛售"),
-    ("KRE/SPY 20日相对", ">-3%", "-3%~-5%", "-5%~-8%", "<-8%", "区域银行跑输大盘，观察信用和商业地产"),
-    ("KRE回撤", "<10%", "10%-15%", "15%-20%", ">20%", "区域银行压力升级，关注存款流出和CDS"),
-    ("HYG/LQD 20日", ">-0.5%", "-0.5%~-1%", "-1%~-2%", "<-2%", "高收益债跑输投资级债，信用风险升温"),
-    ("SOFR-IORB", "<5bp", "5-10bp", "10-25bp", ">25bp", "美元资金市场紧张，警惕流动性冲击"),
+    ("VIX恐慌指数", "VIX", "<20", "20-25", "25-30", ">30；>40危机", "20以上开始对冲，30以上降杠杆，40以上全面防守"),
+    ("标普500回撤", "SPY_DD", "<5%", "5%-10%", "10%-20%", ">20%", "10%以上减少高beta，20%以上按熊市处理"),
+    ("纳指100回撤", "QQQ_DD", "<10%", "10%-15%", "15%-20%", ">20%", "科技/AI仓位集中者优先降仓"),
+    ("高收益债利差", "HY_OAS", "<350bp", "350-450bp", "450-500bp", ">500bp；>700bp危机", "450bp以上减信用暴露，500bp以上防守"),
+    ("投资级信用利差", "IG_OAS", "<100bp", "100-130bp", "130-150bp", ">150bp", "利差走阔说明融资环境恶化"),
+    ("10年期美债收益率", "US10Y", "<4.5%", "4.5%-5.0%", "5.0%-5.5%", ">5.5%", "5%以上压估值，5.5%以上防跨资产抛售"),
+    ("30年期美债收益率", "US30Y", "<5.0%", "5.0%-5.5%", "5.5%-6.0%", ">6.0%", "长端利率失控会冲击全球估值"),
+    ("KRE/SPY 20日相对", "KRE_SPY_20D", ">-3%", "-3%~-5%", "-5%~-8%", "<-8%", "区域银行跑输大盘，观察信用和商业地产"),
+    ("KRE回撤", "KRE_DD", "<10%", "10%-15%", "15%-20%", ">20%", "区域银行压力升级，关注存款流出和CDS"),
+    ("HYG/LQD 20日", "HYG_LQD_20D", ">-0.5%", "-0.5%~-1%", "-1%~-2%", "<-2%", "高收益债跑输投资级债，信用风险升温"),
+    ("SOFR-IORB", "SOFR_IORB", "<5bp", "5-10bp", "10-25bp", ">25bp", "美元资金市场紧张，警惕流动性冲击"),
+    ("美元指数20日涨幅", "DXY_20D", "<2%", "2%-3%", "3%-5%", ">5%", "美元急升会收紧全球流动性"),
 ]
 
 
-def reference_table_html():
+def format_current(key, value):
+    if value is None:
+        return "数据缺失"
+    if key == "VIX":
+        return f"{value:.1f}"
+    if key in ("HY_OAS", "IG_OAS"):
+        return f"{value:.2f}%（{value*100:.0f}bp）"
+    if key in ("US10Y", "US30Y"):
+        return f"{value:.2f}%"
+    if key == "SOFR_IORB":
+        return f"{value*100:.1f}bp"
+    return f"{value:+.2f}%"
+
+
+def reference_table_html(values):
     rows = [
         "<br><b>【指标参考表】</b><br>",
         "<table style='width:100%;border-collapse:collapse;font-size:13px;color:#000;'>",
         "<tr style='background:#f2f2f2;'>"
         "<th style='border:1px solid #ddd;padding:4px;'>指标</th>"
+        "<th style='border:1px solid #ddd;padding:4px;'>当前数据</th>"
         "<th style='border:1px solid #ddd;padding:4px;'>正常</th>"
         "<th style='border:1px solid #ddd;padding:4px;'>关注</th>"
         "<th style='border:1px solid #ddd;padding:4px;'>警告</th>"
         "<th style='border:1px solid #ddd;padding:4px;color:#e60000;'>高风险</th>"
         "<th style='border:1px solid #ddd;padding:4px;'>对应动作</th></tr>",
     ]
-    for indicator, normal, watch, warn, high, action in REFERENCE_ROWS:
+    for indicator, key, normal, watch, warn, high, action in REFERENCE_ROWS:
+        current = format_current(key, values.get(key))
         rows.append(
             "<tr>"
             f"<td style='border:1px solid #ddd;padding:4px;'>{indicator}</td>"
+            f"<td style='border:1px solid #ddd;padding:4px;font-weight:bold;'>{current}</td>"
             f"<td style='border:1px solid #ddd;padding:4px;'>{normal}</td>"
             f"<td style='border:1px solid #ddd;padding:4px;'>{watch}</td>"
             f"<td style='border:1px solid #ddd;padding:4px;'>{warn}</td>"
@@ -125,6 +144,29 @@ def reference_table_html():
         )
     rows.append("</table>")
     return "".join(rows)
+
+
+def reference_markdown(values):
+    now = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
+    lines = [
+        "# 美国市场风险指标当前数据",
+        "",
+        f"> 更新时间：{now} 北京时间",
+        "",
+        "| 指标 | 当前数据 | 正常 | 关注 | 警告 | 高风险/危机 | 对应动作 |",
+        "|---|---:|---:|---:|---:|---:|---|",
+    ]
+    for indicator, key, normal, watch, warn, high, action in REFERENCE_ROWS:
+        current = format_current(key, values.get(key))
+        lines.append(
+            f"| {indicator} | {current} | {normal} | {watch} | {warn} | {high} | {action} |"
+        )
+    lines += [
+        "",
+        "> 风险监控参考，不构成投资建议。",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def fetch_text(url, timeout=30):
@@ -268,12 +310,18 @@ def collect_signals():
     lqd = load_series("LQD", "lqd.us")
     vix = load_series("^VIX", "^vix")
     tnx = load_series("^TNX")
+    tyx = load_series("^TYX")
 
     if not tnx:
         try:
             tnx = fred_series("DGS10")
         except Exception:
             tnx = []
+    if not tyx:
+        try:
+            tyx = fred_series("DGS30")
+        except Exception:
+            tyx = []
 
     spy_dd = drawdown(spy)
     if spy_dd is not None:
@@ -289,35 +337,49 @@ def collect_signals():
         elif vix_now >= 25:
             signals.append(("warn", "VIX升温", f"VIX {vix_now:.1f}"))
 
-    if qqq:
-        qqq_dd = drawdown(qqq)
-        if qqq_dd is not None and qqq_dd <= -15:
-            signals.append(("warn", "纳指高位回撤", f"QQQ距一年高点 {qqq_dd:.1f}%"))
+    qqq_dd = drawdown(qqq) if qqq else None
+    if qqq_dd is not None and qqq_dd <= -15:
+        signals.append(("warn", "纳指高位回撤", f"QQQ距一年高点 {qqq_dd:.1f}%"))
 
+    kre_rel = None
+    kre_dd = drawdown(kre) if kre else None
     if kre and spy:
-        kre_rel = ret(kre, 20) - ret(spy, 20)
-        kre_dd = drawdown(kre)
-        if kre_rel <= -8 or (kre_dd is not None and kre_dd <= -20):
-            signals.append(
-                (
-                    "warn",
-                    "区域银行压力",
-                    f"KRE近20日相对SPY {kre_rel:+.1f}%，距高点 {kre_dd:.1f}%",
-                )
-            )
+        kre_ret = ret(kre, 20)
+        spy_ret = ret(spy, 20)
+        if kre_ret is not None and spy_ret is not None:
+            kre_rel = kre_ret - spy_ret
+        detail_parts = []
+        if kre_rel is not None:
+            detail_parts.append(f"KRE近20日相对SPY {kre_rel:+.1f}%")
+        if kre_dd is not None:
+            detail_parts.append(f"距高点 {kre_dd:.1f}%")
+        kre_level = None
+        if (kre_rel is not None and kre_rel <= -8) or (
+            kre_dd is not None and kre_dd <= -20
+        ):
+            kre_level = "high"
+        elif (kre_rel is not None and kre_rel <= -5) or (
+            kre_dd is not None and kre_dd <= -15
+        ):
+            kre_level = "warn"
+        if kre_level:
+            signals.append((kre_level, "区域银行压力", "，".join(detail_parts)))
 
+    hyg_lqd_change = None
     if hyg and lqd:
         ratio_series = [(ts, h / l) for (ts, h), (_, l) in zip(hyg, lqd) if l]
-        ratio_change = ret(ratio_series, 20)
-        if ratio_change is not None and ratio_change <= -2:
+        hyg_lqd_change = ret(ratio_series, 20)
+        if hyg_lqd_change is not None and hyg_lqd_change <= -2:
             signals.append(
                 (
                     "warn",
                     "高收益债相对走弱",
-                    f"HYG/LQD近20日 {ratio_change:+.2f}%，信用风险升温",
+                    f"HYG/LQD近20日 {hyg_lqd_change:+.2f}%，信用风险升温",
                 )
             )
 
+    hy_now = None
+    hy_change = None
     try:
         hy_oas = fred_series("BAMLH0A0HYM2")
         hy_now = hy_oas[-1][1]
@@ -329,6 +391,7 @@ def collect_signals():
     except Exception:
         pass
 
+    ig_now = None
     try:
         ig_oas = fred_series("BAMLC0A0CM")
         ig_now = ig_oas[-1][1]
@@ -340,28 +403,52 @@ def collect_signals():
     tnx_now = tnx[-1][1] if tnx else None
     if tnx_now is not None:
         if tnx_now >= 5.5:
-            signals.append(("warn", "美债利率冲击", f"10年期收益率 {tnx_now:.2f}%"))
+            signals.append(("high", "美债利率冲击", f"10年期收益率 {tnx_now:.2f}%"))
+        elif tnx_now >= 5.0:
+            signals.append(("warn", "美债利率偏高压制估值", f"10年期收益率 {tnx_now:.2f}%"))
 
+    tyx_now = tyx[-1][1] if tyx else None
+    if tyx_now is not None:
+        if tyx_now >= 6.0:
+            signals.append(("high", "长端利率失控", f"30年期收益率 {tyx_now:.2f}%"))
+        elif tyx_now >= 5.5:
+            signals.append(("warn", "长端利率偏高", f"30年期收益率 {tyx_now:.2f}%"))
+    sofr_spread = None
     try:
         sofr = fred_series("SOFR")
         iorb = fred_series("IORB")
-        spread = sofr[-1][1] - iorb[-1][1]
-        if spread >= 0.25:
-            signals.append(("high", "美元资金市场压力", f"SOFR-IORB {spread:.2f}%"))
-        elif spread >= 0.1:
-            signals.append(("warn", "美元资金面偏紧", f"SOFR-IORB {spread:.2f}%"))
+        sofr_spread = sofr[-1][1] - iorb[-1][1]
+        if sofr_spread >= 0.25:
+            signals.append(("high", "美元资金市场压力", f"SOFR-IORB {sofr_spread:.2f}%"))
+        elif sofr_spread >= 0.1:
+            signals.append(("warn", "美元资金面偏紧", f"SOFR-IORB {sofr_spread:.2f}%"))
     except Exception:
         pass
+
+    dxy_20d = None
+    dxy = load_series("DX-Y.NYB", "dx.f")
+    if dxy:
+        dxy_20d = ret(dxy, 20)
 
     values = {
         "SPY": spy[-1][1] if spy else None,
         "SPY_DD": spy_dd,
         "QQQ": qqq[-1][1] if qqq else None,
+        "QQQ_DD": qqq_dd,
         "VIX": vix_now,
         "KRE": kre[-1][1] if kre else None,
+        "KRE_DD": kre_dd,
+        "KRE_SPY_20D": kre_rel,
         "HYG": hyg[-1][1] if hyg else None,
         "LQD": lqd[-1][1] if lqd else None,
+        "HYG_LQD_20D": hyg_lqd_change,
+        "HY_OAS": hy_now,
+        "HY_OAS_20D": hy_change,
+        "IG_OAS": ig_now,
         "US10Y": tnx_now,
+        "US30Y": tyx_now,
+        "SOFR_IORB": sofr_spread,
+        "DXY_20D": dxy_20d,
     }
     return signals, values
 
@@ -399,11 +486,25 @@ def build_html(signals, values, test=False):
         meta = SIGNAL_META.get(name, {})
         lines.append(f"<b>{name}</b>：{meta.get('watch', '观察信号是否连续出现并扩散。')}<br>")
     lines.append("<br><b>【综合预测】</b><br>")
-    if any(level == "high" for level, _, _ in signals):
+    high_names = [name for level, name, _ in signals if level == "high"]
+    systemic_names = {
+        "VIX恐慌",
+        "高收益债利差警戒",
+        "美元资金市场压力",
+        "标普500熊市回撤",
+    }
+    if high_names and any(name in systemic_names for name in high_names):
         lines.append(
             "<span style='color:#e60000;'>高风险：系统性压力正在上升。"
             "未来1-3个月出现10%以上回调概率约60%-70%，20%以上大跌概率约40%-50%，"
             "演变成金融危机的概率约20%-30%。</span><br>"
+        )
+    elif high_names:
+        lines.append(
+            "<span style='color:#e60000;'>局部高风险：已有压力点进入高风险区，"
+            "但VIX、信用利差和美元资金市场尚未同步恶化。"
+            "未来1-3个月出现10%以上回调概率约50%-60%，20%以上大跌概率约25%-35%，"
+            "演变成金融危机的概率暂时约10%-20%；若信用和资金市场跟跌，概率会迅速上升。</span><br>"
         )
     else:
         lines.append(
@@ -416,7 +517,7 @@ def build_html(signals, values, test=False):
     lines.append("2️⃣ 增加现金、短债、黄金等防守资产；<br>")
     lines.append("3️⃣ 观察信号是否连续2-3天出现，避免单日假信号；<br>")
     lines.append("4️⃣ 若VIX>30、信用利差快速走阔、区域银行继续大跌，优先控制风险。<br>")
-    lines.append(reference_table_html())
+    lines.append(reference_table_html(values))
     lines.append(
         "<br><span style='color:#555555;font-size:13px;'>"
         "风险监控，不构成投资建议。</span></div>"
@@ -439,6 +540,11 @@ def main():
     print("SIGNALS", json.dumps(signals, ensure_ascii=False))
     if dry_run:
         return 0
+    if not test_mode:
+        REPORTS_DIR.mkdir(exist_ok=True)
+        reference_path = REPORTS_DIR / "us_risk_indicators_latest.md"
+        reference_path.write_text(reference_markdown(values), encoding="utf-8")
+        print("REFERENCE_SAVED", reference_path)
     if not signals and not test_mode:
         print("NO_SIGNAL")
         return 0
