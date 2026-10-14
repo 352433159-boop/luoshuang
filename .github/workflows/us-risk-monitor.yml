@@ -34,6 +34,6 @@ jobs:
         run: |
           git config user.name "codex"
           git config user.email "codex@local"
-          git add reports/us_risk_state.json 2>/dev/null || true
+          git add reports/us_risk_state.json reports/us_risk_indicators_latest.md 2>/dev/null || true
           git diff --cached --quiet || git commit -m "update US risk state $(date +%Y%m%d-%H%M)"
           git push
