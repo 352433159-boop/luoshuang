@@ -86,6 +86,46 @@ SIGNAL_META = {
     },
 }
 
+REFERENCE_ROWS = [
+    ("VIX恐慌指数", "<20", "20-25", "25-30", ">30；>40危机", "20以上开始对冲，30以上降杠杆，40以上全面防守"),
+    ("标普500回撤", "<5%", "5%-10%", "10%-20%", ">20%", "10%以上减少高beta，20%以上按熊市处理"),
+    ("纳指100回撤", "<10%", "10%-15%", "15%-20%", ">20%", "科技/AI仓位集中者优先降仓"),
+    ("高收益债利差", "<350bp", "350-450bp", "450-500bp", ">500bp；>700bp危机", "450bp以上减信用暴露，500bp以上防守"),
+    ("投资级信用利差", "<100bp", "100-130bp", "130-150bp", ">150bp", "利差走阔说明融资环境恶化"),
+    ("10年期美债收益率", "<4.5%", "4.5%-5.0%", "5.0%-5.5%", ">5.5%", "5%以上压估值，5.5%以上防跨资产抛售"),
+    ("KRE/SPY 20日相对", ">-3%", "-3%~-5%", "-5%~-8%", "<-8%", "区域银行跑输大盘，观察信用和商业地产"),
+    ("KRE回撤", "<10%", "10%-15%", "15%-20%", ">20%", "区域银行压力升级，关注存款流出和CDS"),
+    ("HYG/LQD 20日", ">-0.5%", "-0.5%~-1%", "-1%~-2%", "<-2%", "高收益债跑输投资级债，信用风险升温"),
+    ("SOFR-IORB", "<5bp", "5-10bp", "10-25bp", ">25bp", "美元资金市场紧张，警惕流动性冲击"),
+]
+
+
+def reference_table_html():
+    rows = [
+        "<br><b>【指标参考表】</b><br>",
+        "<table style='width:100%;border-collapse:collapse;font-size:13px;color:#000;'>",
+        "<tr style='background:#f2f2f2;'>"
+        "<th style='border:1px solid #ddd;padding:4px;'>指标</th>"
+        "<th style='border:1px solid #ddd;padding:4px;'>正常</th>"
+        "<th style='border:1px solid #ddd;padding:4px;'>关注</th>"
+        "<th style='border:1px solid #ddd;padding:4px;'>警告</th>"
+        "<th style='border:1px solid #ddd;padding:4px;color:#e60000;'>高风险</th>"
+        "<th style='border:1px solid #ddd;padding:4px;'>对应动作</th></tr>",
+    ]
+    for indicator, normal, watch, warn, high, action in REFERENCE_ROWS:
+        rows.append(
+            "<tr>"
+            f"<td style='border:1px solid #ddd;padding:4px;'>{indicator}</td>"
+            f"<td style='border:1px solid #ddd;padding:4px;'>{normal}</td>"
+            f"<td style='border:1px solid #ddd;padding:4px;'>{watch}</td>"
+            f"<td style='border:1px solid #ddd;padding:4px;'>{warn}</td>"
+            f"<td style='border:1px solid #ddd;padding:4px;color:#e60000;'>{high}</td>"
+            f"<td style='border:1px solid #ddd;padding:4px;'>{action}</td>"
+            "</tr>"
+        )
+    rows.append("</table>")
+    return "".join(rows)
+
 
 def fetch_text(url, timeout=30):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -376,6 +416,7 @@ def build_html(signals, values, test=False):
     lines.append("2️⃣ 增加现金、短债、黄金等防守资产；<br>")
     lines.append("3️⃣ 观察信号是否连续2-3天出现，避免单日假信号；<br>")
     lines.append("4️⃣ 若VIX>30、信用利差快速走阔、区域银行继续大跌，优先控制风险。<br>")
+    lines.append(reference_table_html())
     lines.append(
         "<br><span style='color:#555555;font-size:13px;'>"
         "风险监控，不构成投资建议。</span></div>"
