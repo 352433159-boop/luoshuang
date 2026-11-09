@@ -84,6 +84,21 @@ SIGNAL_META = {
         "result": "风险资产波动加大，套息交易和杠杆资金可能被动减仓。",
         "watch": "SOFR-IORB是否继续上升、回购市场和美联储表态。",
     },
+    "美元急升": {
+        "cause": "避险资金流入美元，或美国利率相对其他经济体上升。",
+        "result": "全球美元流动性收紧，新兴市场、黄金和高估值资产承压。",
+        "watch": "美元指数是否继续上升、非美货币和黄金是否同步走弱。",
+    },
+    "美元走强": {
+        "cause": "美国利率或避险需求上升，资金回流美元资产。",
+        "result": "全球风险资产估值承压，黄金短线波动加大。",
+        "watch": "美元指数20日涨幅是否扩大到5%以上。",
+    },
+    "全面风险组合": {
+        "cause": "波动率上升、信用压力、区域银行跑输和美元急升同时出现，风险从局部扩散到信用和流动性链条。",
+        "result": "可能出现20%以上股市回撤、信用收缩和融资市场紧张；若美元资金市场也紧张，可能演变为系统性金融危机。",
+        "watch": "四项是否同时确认，HY OAS/IG OAS、SOFR-IORB和美联储流动性工具是否继续恶化。",
+    },
 }
 
 REFERENCE_ROWS = [
@@ -114,6 +129,56 @@ def format_current(key, value):
     if key == "SOFR_IORB":
         return f"{value*100:.1f}bp"
     return f"{value:+.2f}%"
+
+
+def combo_check(values):
+    vix = values.get("VIX")
+    hyg_lqd = values.get("HYG_LQD_20D")
+    hy_oas = values.get("HY_OAS")
+    kre_rel = values.get("KRE_SPY_20D")
+    kre_dd = values.get("KRE_DD")
+    dxy = values.get("DXY_20D")
+
+    credit_ok = None
+    credit_detail = "信用数据缺失"
+    if hyg_lqd is not None:
+        credit_ok = hyg_lqd <= -2
+        credit_detail = f"HYG/LQD {hyg_lqd:+.2f}%"
+    if hy_oas is not None:
+        hy_ok = hy_oas >= 5
+        credit_ok = bool(credit_ok or hy_ok)
+        credit_detail += f"；HY OAS {hy_oas:.2f}%"
+
+    bank_ok = None
+    bank_detail = "区域银行数据缺失"
+    if kre_rel is not None or kre_dd is not None:
+        bank_ok = bool(
+            (kre_rel is not None and kre_rel <= -5)
+            or (kre_dd is not None and kre_dd <= -15)
+        )
+        parts = []
+        if kre_rel is not None:
+            parts.append(f"KRE/SPY {kre_rel:+.2f}%")
+        if kre_dd is not None:
+            parts.append(f"KRE回撤 {kre_dd:+.2f}%")
+        bank_detail = "；".join(parts)
+
+    checks = [
+        (
+            "VIX>30",
+            None if vix is None else vix >= 30,
+            "数据缺失" if vix is None else f"VIX {vix:.1f}",
+        ),
+        ("信用压力", credit_ok, credit_detail),
+        ("区域银行跑输", bank_ok, bank_detail),
+        (
+            "美元急升",
+            None if dxy is None else dxy >= 3,
+            "数据缺失" if dxy is None else f"美元指数20日 {dxy:+.2f}%",
+        ),
+    ]
+    count = sum(1 for _, ok, _ in checks if ok is True)
+    return {"checks": checks, "count": count}
 
 
 def reference_table_html(values):
@@ -372,9 +437,17 @@ def collect_signals():
         if hyg_lqd_change is not None and hyg_lqd_change <= -2:
             signals.append(
                 (
-                    "warn",
+                    "high",
                     "高收益债相对走弱",
                     f"HYG/LQD近20日 {hyg_lqd_change:+.2f}%，信用风险升温",
+                )
+            )
+        elif hyg_lqd_change is not None and hyg_lqd_change <= -1:
+            signals.append(
+                (
+                    "warn",
+                    "高收益债相对走弱",
+                    f"HYG/LQD近20日 {hyg_lqd_change:+.2f}%",
                 )
             )
 
@@ -429,6 +502,10 @@ def collect_signals():
     dxy = load_series("DX-Y.NYB", "dx.f")
     if dxy:
         dxy_20d = ret(dxy, 20)
+        if dxy_20d is not None and dxy_20d >= 5:
+            signals.append(("high", "美元急升", f"美元指数20日 {dxy_20d:+.2f}%"))
+        elif dxy_20d is not None and dxy_20d >= 3:
+            signals.append(("warn", "美元走强", f"美元指数20日 {dxy_20d:+.2f}%"))
 
     values = {
         "SPY": spy[-1][1] if spy else None,
@@ -450,6 +527,16 @@ def collect_signals():
         "SOFR_IORB": sofr_spread,
         "DXY_20D": dxy_20d,
     }
+    combo = combo_check(values)
+    if combo["count"] >= 3:
+        confirmed = [label for label, ok, _ in combo["checks"] if ok]
+        signals.append(
+            (
+                "high",
+                "全面风险组合",
+                f"{combo['count']}/4 条件满足：" + "、".join(confirmed),
+            )
+        )
     return signals, values
 
 
@@ -473,6 +560,21 @@ def build_html(signals, values, test=False):
         if value is None:
             continue
         lines.append(f"{key}：{value:.4f}<br>")
+    combo = combo_check(values)
+    lines.append("<br><b>【全面风险组合检查】</b><br>")
+    for label, ok, detail in combo["checks"]:
+        icon = "✅" if ok is True else ("❔" if ok is None else "❌")
+        lines.append(f"{icon} {label}：{detail}<br>")
+    if combo["count"] >= 4:
+        lines.append(
+            "<span style='color:#e60000;font-weight:bold;'>当前4/4：全面风险组合已确认，立即防守。</span><br>"
+        )
+    elif combo["count"] == 3:
+        lines.append(
+            "<span style='color:#e60000;font-weight:bold;'>当前3/4：全面风险组合接近形成，高风险。</span><br>"
+        )
+    else:
+        lines.append(f"当前{combo['count']}/4：尚未形成全面风险组合。<br>")
     lines.append("<br><b>【背后原因】</b><br>")
     for level, name, detail in signals:
         meta = SIGNAL_META.get(name, {})
