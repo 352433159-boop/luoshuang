@@ -16,6 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = REPO_ROOT / "reports"
 STATE_PATH = REPORTS_DIR / "us_risk_state.json"
+FRED_CACHE_PATH = REPORTS_DIR / "us_risk_data_cache.json"
 TZ = timezone(timedelta(hours=8))
 
 SIGNAL_META = {
@@ -117,18 +118,22 @@ REFERENCE_ROWS = [
 ]
 
 
-def format_current(key, value):
+def format_current(key, value, status=None):
     if value is None:
         return "数据缺失"
     if key == "VIX":
-        return f"{value:.1f}"
-    if key in ("HY_OAS", "IG_OAS"):
-        return f"{value:.2f}%（{value*100:.0f}bp）"
-    if key in ("US10Y", "US30Y"):
-        return f"{value:.2f}%"
-    if key == "SOFR_IORB":
-        return f"{value*100:.1f}bp"
-    return f"{value:+.2f}%"
+        text = f"{value:.1f}"
+    elif key in ("HY_OAS", "IG_OAS"):
+        text = f"{value:.2f}%（{value*100:.0f}bp）"
+    elif key in ("US10Y", "US30Y"):
+        text = f"{value:.2f}%"
+    elif key == "SOFR_IORB":
+        text = f"{value*100:.1f}bp"
+    else:
+        text = f"{value:+.2f}%"
+    if status and status.get(key) == "cache":
+        text += "（缓存）"
+    return text
 
 
 def combo_check(values):
@@ -181,7 +186,7 @@ def combo_check(values):
     return {"checks": checks, "count": count}
 
 
-def reference_table_html(values):
+def reference_table_html(values, status=None):
     rows = [
         "<br><b>【指标参考表】</b><br>",
         "<table style='width:100%;border-collapse:collapse;font-size:13px;color:#000;'>",
@@ -195,7 +200,7 @@ def reference_table_html(values):
         "<th style='border:1px solid #ddd;padding:4px;'>对应动作</th></tr>",
     ]
     for indicator, key, normal, watch, warn, high, action in REFERENCE_ROWS:
-        current = format_current(key, values.get(key))
+        current = format_current(key, values.get(key), status)
         rows.append(
             "<tr>"
             f"<td style='border:1px solid #ddd;padding:4px;'>{indicator}</td>"
@@ -211,7 +216,7 @@ def reference_table_html(values):
     return "".join(rows)
 
 
-def reference_markdown(values):
+def reference_markdown(values, status=None):
     now = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
     lines = [
         "# 美国市场风险指标当前数据",
@@ -222,7 +227,7 @@ def reference_markdown(values):
         "|---|---:|---:|---:|---:|---:|---|",
     ]
     for indicator, key, normal, watch, warn, high, action in REFERENCE_ROWS:
-        current = format_current(key, values.get(key))
+        current = format_current(key, values.get(key), status)
         lines.append(
             f"| {indicator} | {current} | {normal} | {watch} | {warn} | {high} | {action} |"
         )
@@ -280,21 +285,85 @@ def stooq_series(symbol):
     return series
 
 
-def fred_series(series_id):
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    rows = list(csv.reader(io.StringIO(fetch_text(url))))
+def fred_api_series(series_id):
+    api_key = os.environ.get("FRED_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("FRED_API_KEY not configured")
+    url = (
+        "https://api.stlouisfed.org/fred/series/observations?"
+        f"series_id={series_id}&api_key={api_key}&file_type=json"
+        "&sort_order=desc&limit=180"
+    )
+    data = json.loads(fetch_text(url))
     series = []
-    for row in rows[1:]:
-        if len(row) < 2 or row[1] in ("", "."):
+    for obs in data.get("observations", []):
+        if obs.get("value") in ("", "."):
             continue
         try:
-            date = datetime.strptime(row[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            series.append((int(date.timestamp()), float(row[1])))
+            date = datetime.strptime(obs["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            series.append((int(date.timestamp()), float(obs["value"])))
         except Exception:
             continue
     if not series:
-        raise ValueError("empty fred series")
+        raise ValueError("empty fred api series")
+    series.reverse()
     return series
+
+
+def fred_series(series_id):
+    last_error = None
+    try:
+        return fred_api_series(series_id)
+    except Exception as exc:
+        last_error = exc
+    for _ in range(2):
+        try:
+            url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+            rows = list(csv.reader(io.StringIO(fetch_text(url, timeout=15))))
+            series = []
+            for row in rows[1:]:
+                if len(row) < 2 or row[1] in ("", "."):
+                    continue
+                try:
+                    date = datetime.strptime(row[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    series.append((int(date.timestamp()), float(row[1])))
+                except Exception:
+                    continue
+            if series:
+                return series
+        except Exception as exc:
+            last_error = exc
+    raise last_error or ValueError("empty fred series")
+
+
+def load_fred_cache():
+    try:
+        return json.loads(FRED_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_fred_cache(cache):
+    REPORTS_DIR.mkdir(exist_ok=True)
+    FRED_CACHE_PATH.write_text(
+        json.dumps(cache, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+
+def cached_fred_series(series_id, cache, status, status_key):
+    try:
+        series = fred_series(series_id)
+        cache[series_id] = [[ts, value] for ts, value in series[-120:]]
+        status[status_key] = "live"
+        return series
+    except Exception:
+        cached = cache.get(series_id, [])
+        if cached:
+            status[status_key] = "cache"
+            return [(int(ts), float(value)) for ts, value in cached]
+        status[status_key] = "missing"
+        return []
 
 
 def load_series(ticker, stooq_symbol=None):
@@ -367,6 +436,8 @@ def push(title, html):
 
 def collect_signals():
     signals = []
+    cache = load_fred_cache()
+    status = {}
 
     spy = load_series("SPY", "spy.us")
     qqq = load_series("QQQ", "qqq.us")
@@ -378,15 +449,9 @@ def collect_signals():
     tyx = load_series("^TYX")
 
     if not tnx:
-        try:
-            tnx = fred_series("DGS10")
-        except Exception:
-            tnx = []
+        tnx = cached_fred_series("DGS10", cache, status, "US10Y")
     if not tyx:
-        try:
-            tyx = fred_series("DGS30")
-        except Exception:
-            tyx = []
+        tyx = cached_fred_series("DGS30", cache, status, "US30Y")
 
     spy_dd = drawdown(spy)
     if spy_dd is not None:
@@ -453,27 +518,25 @@ def collect_signals():
 
     hy_now = None
     hy_change = None
-    try:
-        hy_oas = fred_series("BAMLH0A0HYM2")
+    hy_oas = cached_fred_series("BAMLH0A0HYM2", cache, status, "HY_OAS")
+    if hy_oas:
         hy_now = hy_oas[-1][1]
         hy_change = abs_change(hy_oas, 20)
         if hy_now >= 5:
             signals.append(("high", "高收益债利差警戒", f"HY OAS {hy_now:.2f}%"))
         elif hy_change is not None and hy_change >= 1:
             signals.append(("warn", "高收益债利差走阔", f"20日 +{hy_change:.2f}%"))
-    except Exception:
-        pass
 
     ig_now = None
-    try:
-        ig_oas = fred_series("BAMLC0A0CM")
+    ig_oas = cached_fred_series("BAMLC0A0CM", cache, status, "IG_OAS")
+    if ig_oas:
         ig_now = ig_oas[-1][1]
         if ig_now >= 1.5:
             signals.append(("warn", "投资级信用利差走阔", f"IG OAS {ig_now:.2f}%"))
-    except Exception:
-        pass
 
     tnx_now = tnx[-1][1] if tnx else None
+    if tnx_now is not None and "US10Y" not in status:
+        status["US10Y"] = "live"
     if tnx_now is not None:
         if tnx_now >= 5.5:
             signals.append(("high", "美债利率冲击", f"10年期收益率 {tnx_now:.2f}%"))
@@ -481,22 +544,29 @@ def collect_signals():
             signals.append(("warn", "美债利率偏高压制估值", f"10年期收益率 {tnx_now:.2f}%"))
 
     tyx_now = tyx[-1][1] if tyx else None
+    if tyx_now is not None and "US30Y" not in status:
+        status["US30Y"] = "live"
     if tyx_now is not None:
         if tyx_now >= 6.0:
             signals.append(("high", "长端利率失控", f"30年期收益率 {tyx_now:.2f}%"))
         elif tyx_now >= 5.5:
             signals.append(("warn", "长端利率偏高", f"30年期收益率 {tyx_now:.2f}%"))
     sofr_spread = None
-    try:
-        sofr = fred_series("SOFR")
-        iorb = fred_series("IORB")
+    sofr = cached_fred_series("SOFR", cache, status, "SOFR")
+    iorb = cached_fred_series("IORB", cache, status, "IORB")
+    if sofr and iorb:
         sofr_spread = sofr[-1][1] - iorb[-1][1]
         if sofr_spread >= 0.25:
             signals.append(("high", "美元资金市场压力", f"SOFR-IORB {sofr_spread:.2f}%"))
         elif sofr_spread >= 0.1:
             signals.append(("warn", "美元资金面偏紧", f"SOFR-IORB {sofr_spread:.2f}%"))
-    except Exception:
-        pass
+        status["SOFR_IORB"] = (
+            "cache"
+            if status.get("SOFR") == "cache" or status.get("IORB") == "cache"
+            else "live"
+        )
+    else:
+        status["SOFR_IORB"] = "missing"
 
     dxy_20d = None
     dxy = load_series("DX-Y.NYB", "dx.f")
@@ -527,6 +597,7 @@ def collect_signals():
         "SOFR_IORB": sofr_spread,
         "DXY_20D": dxy_20d,
     }
+    save_fred_cache(cache)
     combo = combo_check(values)
     if combo["count"] >= 3:
         confirmed = [label for label, ok, _ in combo["checks"] if ok]
@@ -537,10 +608,10 @@ def collect_signals():
                 f"{combo['count']}/4 条件满足：" + "、".join(confirmed),
             )
         )
-    return signals, values
+    return signals, values, status
 
 
-def build_html(signals, values, test=False):
+def build_html(signals, values, test=False, status=None):
     now = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
     title = "🧪 美国市场风险监控测试" if test else "🚨 美国市场风险信号"
     lines = [
@@ -619,7 +690,7 @@ def build_html(signals, values, test=False):
     lines.append("2️⃣ 增加现金、短债、黄金等防守资产；<br>")
     lines.append("3️⃣ 观察信号是否连续2-3天出现，避免单日假信号；<br>")
     lines.append("4️⃣ 若VIX>30、信用利差快速走阔、区域银行继续大跌，优先控制风险。<br>")
-    lines.append(reference_table_html(values))
+    lines.append(reference_table_html(values, status))
     lines.append(
         "<br><span style='color:#555555;font-size:13px;'>"
         "风险监控，不构成投资建议。</span></div>"
@@ -637,15 +708,16 @@ def main():
             ("warn", "区域银行压力", "KRE近20日相对SPY -9.5%，测试信号"),
         ]
         values = {"VIX": 32.0, "HY_OAS": 5.2, "KRE_SPY_20D": -9.5}
+        status = {}
     else:
-        signals, values = collect_signals()
+        signals, values, status = collect_signals()
     print("SIGNALS", json.dumps(signals, ensure_ascii=False))
     if dry_run:
         return 0
     if not test_mode:
         REPORTS_DIR.mkdir(exist_ok=True)
         reference_path = REPORTS_DIR / "us_risk_indicators_latest.md"
-        reference_path.write_text(reference_markdown(values), encoding="utf-8")
+        reference_path.write_text(reference_markdown(values, status), encoding="utf-8")
         print("REFERENCE_SAVED", reference_path)
     if not signals and not test_mode:
         print("NO_SIGNAL")
@@ -670,7 +742,7 @@ def main():
             return 0
 
     title = "🧪 美国市场风险监控测试" if test_mode else "🚨 美国市场风险信号"
-    code = push(title, build_html(signals, values, test=test_mode))
+    code = push(title, build_html(signals, values, test=test_mode, status=status))
     if code == 0 and not test_mode:
         REPORTS_DIR.mkdir(exist_ok=True)
         STATE_PATH.write_text(
