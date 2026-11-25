@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""美国市场风险监控：信用、波动率、利率、银行压力触发时推送微信。"""
+"""美国市场风险监控：信用、波动率、利率、美元指数和银行压力触发时推送微信。"""
 
 import csv
 import io
 import json
 import os
+import re
 import sys
 import time
 import urllib.parse
@@ -114,7 +115,7 @@ REFERENCE_ROWS = [
     ("KRE回撤", "KRE_DD", "<10%", "10%-15%", "15%-20%", ">20%", "区域银行压力升级，关注存款流出和CDS"),
     ("HYG/LQD 20日", "HYG_LQD_20D", ">-0.5%", "-0.5%~-1%", "-1%~-2%", "<-2%", "高收益债跑输投资级债，信用风险升温"),
     ("SOFR-IORB", "SOFR_IORB", "<5bp", "5-10bp", "10-25bp", ">25bp", "美元资金市场紧张，警惕流动性冲击"),
-    ("美元指数20日涨幅", "DXY_20D", "<2%", "2%-3%", "3%-5%", ">5%", "美元急升会收紧全球流动性"),
+    ("美元指数 DXY（20日阈值）", "DXY_20D", "<2%", "2%-3%", "3%-5%", ">5%", "美元急升会收紧全球流动性"),
 ]
 
 
@@ -123,6 +124,8 @@ def format_current(key, value, status=None):
         return "数据缺失"
     if key == "VIX":
         text = f"{value:.1f}"
+    elif key == "DXY":
+        text = f"{value:.2f}"
     elif key in ("HY_OAS", "IG_OAS"):
         text = f"{value:.2f}%（{value*100:.0f}bp）"
     elif key in ("US10Y", "US30Y"):
@@ -132,6 +135,35 @@ def format_current(key, value, status=None):
     else:
         text = f"{value:+.2f}%"
     if status and status.get(key) == "cache":
+        text += "（缓存）"
+    return text
+
+
+def format_reference_current(key, values, status=None):
+    if key != "DXY_20D":
+        return format_current(key, values.get(key), status)
+
+    level = values.get("DXY")
+    daily = values.get("DXY_1D")
+    change = values.get("DXY_20D")
+    if level is None and daily is None and change is None:
+        return "数据缺失"
+
+    details = []
+    if daily is not None:
+        details.append(f"日 {daily:+.2f}%")
+    if change is not None:
+        details.append(f"20日 {change:+.2f}%")
+    elif level is not None and details:
+        details.append("20日 数据缺失")
+
+    if level is not None:
+        text = f"{level:.2f}"
+        if details:
+            text += "（" + "，".join(details) + "）"
+    else:
+        text = "，".join(details)
+    if status and status.get("DXY") == "cache":
         text += "（缓存）"
     return text
 
@@ -200,7 +232,7 @@ def reference_table_html(values, status=None):
         "<th style='border:1px solid #ddd;padding:4px;'>对应动作</th></tr>",
     ]
     for indicator, key, normal, watch, warn, high, action in REFERENCE_ROWS:
-        current = format_current(key, values.get(key), status)
+        current = format_reference_current(key, values, status)
         rows.append(
             "<tr>"
             f"<td style='border:1px solid #ddd;padding:4px;'>{indicator}</td>"
@@ -227,7 +259,7 @@ def reference_markdown(values, status=None):
         "|---|---:|---:|---:|---:|---:|---|",
     ]
     for indicator, key, normal, watch, warn, high, action in REFERENCE_ROWS:
-        current = format_current(key, values.get(key), status)
+        current = format_reference_current(key, values, status)
         lines.append(
             f"| {indicator} | {current} | {normal} | {watch} | {warn} | {high} | {action} |"
         )
@@ -376,6 +408,24 @@ def load_series(ticker, stooq_symbol=None):
             except Exception:
                 pass
     return []
+
+
+def cnbc_dxy_quote():
+    """Return the current ICE dollar index and daily move from CNBC."""
+    try:
+        text = fetch_text("https://www.cnbc.com/quotes/.DXY", timeout=20)
+        match = re.search(
+            r'"symbol":"\.DXY".*?'
+            r'"last":"([0-9.]+)".*?'
+            r'"change_pct":"([+-]?[0-9.]+)%"',
+            text,
+            flags=re.DOTALL,
+        )
+        if not match:
+            return None, None
+        return float(match.group(1)), float(match.group(2))
+    except Exception:
+        return None, None
 
 
 def ret(series, days):
@@ -568,14 +618,39 @@ def collect_signals():
     else:
         status["SOFR_IORB"] = "missing"
 
+    dxy_now = None
+    dxy_1d = None
     dxy_20d = None
     dxy = load_series("DX-Y.NYB", "dx.f")
+    if not dxy:
+        current_level, daily_change = cnbc_dxy_quote()
+        if current_level is not None:
+            dxy = [(int(time.time()), current_level)]
+            dxy_1d = daily_change
     if dxy:
+        dxy_now = dxy[-1][1]
+        status["DXY"] = "live"
+        if dxy_1d is None:
+            dxy_1d = ret(dxy, 1)
         dxy_20d = ret(dxy, 20)
         if dxy_20d is not None and dxy_20d >= 5:
-            signals.append(("high", "美元急升", f"美元指数20日 {dxy_20d:+.2f}%"))
+            signals.append(
+                (
+                    "high",
+                    "美元急升",
+                    f"美元指数 {dxy_now:.2f}，20日 {dxy_20d:+.2f}%",
+                )
+            )
         elif dxy_20d is not None and dxy_20d >= 3:
-            signals.append(("warn", "美元走强", f"美元指数20日 {dxy_20d:+.2f}%"))
+            signals.append(
+                (
+                    "warn",
+                    "美元走强",
+                    f"美元指数 {dxy_now:.2f}，20日 {dxy_20d:+.2f}%",
+                )
+            )
+    else:
+        status["DXY"] = "missing"
 
     values = {
         "SPY": spy[-1][1] if spy else None,
@@ -595,6 +670,8 @@ def collect_signals():
         "US10Y": tnx_now,
         "US30Y": tyx_now,
         "SOFR_IORB": sofr_spread,
+        "DXY": dxy_now,
+        "DXY_1D": dxy_1d,
         "DXY_20D": dxy_20d,
     }
     save_fred_cache(cache)
@@ -621,14 +698,22 @@ def build_html(signals, values, test=False, status=None):
         "<b>【触发信号】</b><br>",
     ]
     if test:
-        lines.append("<span style='color:#e60000;'>测试信号：VIX升高 + 信用利差走阔 + 区域银行走弱</span><br>")
+        lines.append(
+            "<span style='color:#e60000;'>"
+            "测试信号：VIX升高 + 信用利差走阔 + 区域银行走弱 + 美元走强"
+            "</span><br>"
+        )
     for level, name, detail in signals:
         color = "#e60000" if level == "high" else "#e60000"
         label = "🔴 高风险" if level == "high" else "🟠 警告"
         lines.append(f"<span style='color:{color};'>{label}｜{name}｜{detail}</span><br>")
     lines.append("<br><b>【当前指标】</b><br>")
+    lines.append(
+        "美元指数 DXY："
+        f"{format_reference_current('DXY_20D', values, status)}<br>"
+    )
     for key, value in values.items():
-        if value is None:
+        if value is None or key in ("DXY", "DXY_1D", "DXY_20D"):
             continue
         lines.append(f"{key}：{value:.4f}<br>")
     combo = combo_check(values)
@@ -706,13 +791,22 @@ def main():
             ("high", "VIX恐慌", "VIX 32.0，测试信号"),
             ("warn", "高收益债利差走阔", "HY OAS 20日 +1.20%，测试信号"),
             ("warn", "区域银行压力", "KRE近20日相对SPY -9.5%，测试信号"),
+            ("warn", "美元走强", "美元指数 100.50，20日 +3.20%，测试信号"),
         ]
-        values = {"VIX": 32.0, "HY_OAS": 5.2, "KRE_SPY_20D": -9.5}
+        values = {
+            "VIX": 32.0,
+            "HY_OAS": 5.2,
+            "KRE_SPY_20D": -9.5,
+            "DXY": 100.50,
+            "DXY_1D": 0.21,
+            "DXY_20D": 3.20,
+        }
         status = {}
     else:
         signals, values, status = collect_signals()
     print("SIGNALS", json.dumps(signals, ensure_ascii=False))
     if dry_run:
+        print("VALUES", json.dumps(values, ensure_ascii=False))
         return 0
     if not test_mode:
         REPORTS_DIR.mkdir(exist_ok=True)
