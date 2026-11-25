@@ -13,6 +13,10 @@ on:
         description: "是否发送测试推送"
         required: false
         default: "false"
+      dry_run:
+        description: "只读取数据和生成日志，不发送推送"
+        required: false
+        default: "false"
 
 jobs:
   check:
@@ -29,9 +33,16 @@ jobs:
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-        run: python scripts/us_risk_monitor.py ${{ github.event.inputs.test == 'true' && '--test' || '' }}
+          TEST_MODE: ${{ github.event.inputs.test }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          args=()
+          if [ "$TEST_MODE" = "true" ]; then args+=(--test); fi
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          python scripts/us_risk_monitor.py "${args[@]}"
 
       - name: 💾 保存风险状态
+        if: ${{ github.event.inputs.dry_run != 'true' }}
         run: |
           git config user.name "codex"
           git config user.email "codex@local"
